@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Generated indexes (regenerable via `python tsindex.py build`)
+*.db
+*.sqlite
+*.sqlite3
+tsindex.json
+
+# Sample / external code (local-only)
+pcie_scsc/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp

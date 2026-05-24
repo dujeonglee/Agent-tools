@@ -1,0 +1,81 @@
+// Kernel version: pick 6.1.0 → all "modern kernel" branches active.
+#define LINUX_VERSION_CODE 393472
+
+// Vendor/platform — undefined (so first/older-Samsung branches inactive)
+#undef SCSC_SEP_VERSION
+
+// Most CONFIG_* flags we want to enable (modern, full-featured build)
+#define CONFIG_SCSC_WLAN_EHT 1
+#define CONFIG_SCSC_WLAN_SUPPORT_6G 1
+#define CONFIG_SCSC_WLAN_TX_API 1
+#define CONFIG_SCSC_WLAN_DEBUG 1
+#define CONFIG_SCSC_WIFI_NAN_ENABLE 1
+#define CONFIG_SCSC_WLAN_RX_NAPI 1
+#define CONFIG_SCSC_WLAN_NAPI_PER_NETDEV 1
+#define CONFIG_SCSC_WLAN_HIP5 1
+#define CONFIG_SCSC_WIFI_NAN_PAIRING 1
+#define CONFIG_SCSC_SMAPPER 1
+#define CONFIG_SCSC_WLAN_HIP4_PROFILING 1
+#define CONFIG_SCSC_LOG_COLLECTION 1
+#define CONFIG_SCSC_WLAN_HOST_DPD 1
+#define CONFIG_SCSC_WLAN_CPUHP_MONITOR 1
+#define CONFIG_SCSC_WLAN_ANDROID 1
+#define CONFIG_SCSC_WLAN_WES_NCHO 1
+#define CONFIG_SLSI_WLAN_PACKET_FILETR_V2 1
+#define CONFIG_SCSC_WLAN_STA_ENHANCED_ARP_DETECT 1
+#define CONFIG_SCSC_WLAN_RX_NAPI_GRO 1
+#define CONFIG_SLSI_WLAN_STA_FWD_BEACON 1
+#define CONFIG_SCSC_WLAN_DUAL_STATION 1
+#define CONFIG_SCSC_WLAN_ENABLE_MAC_RANDOMISATION 1
+#define CONFIG_IPV6 1
+#define CONFIG_SCSC_WLAN_TAS 1
+#define CONFIG_SCSC_PCIE_CHIP 1
+#define CONFIG_SLSI_WLAN_LPC 1
+
+// Disabled / undefined
+#undef CONFIG_SCSC_WLAN_WONDERTAP
+#undef CONFIG_SCSC_WLAN_LOAD_BALANCE_MANAGER
+#undef CONFIG_SCSC_WLAN_ARP_FLOW_CONTROL
+#undef CONFIG_SCSC_WLAN_WIFI_SHARING
+#undef CONFIG_SLSI_WLAN_PACKET_FILETR_V1
+#undef SLSI_TEST_DEV
+#undef EXPERIMENTAL_DYNAMIC_SMOD_ADAPTATION
+#undef __cplusplus
+
+// Additional CONFIG_* keys found in #if conditions — conservative defaults for
+// a modern build. Adjust to taste if your target build enables these.
+#undef CONFIG_SCSC_WLAN_GSCAN_ENABLE
+#undef CONFIG_SCSC_QOS
+#undef CONFIG_SCSC_WLAN_MUTEX_DEBUG
+#undef CONFIG_SCSC_WLAN_ENHANCED_PKT_FILTER
+#undef CONFIG_SCSC_WIFILOGGER_DEBUGFS
+#undef CONFIG_SCSC_WLAN_TPUT_MONITOR
+#undef CONFIG_SCSC_WLAN_SAP_POWER_SAVE
+#undef CONFIG_SCSC_WLAN_ENHANCED_LOGGING
+#undef CONFIG_SCSC_DEBUG
+#undef CONFIG_SCSC_BB_REDWOOD
+#undef CONFIG_SLSI_WLAN_DCTAS
+#undef CONFIG_SCSC_WLAN_ADAPTIVE_TX_MOD
+#undef CONFIG_WLBT_LOCAL_MIB
+#undef CONFIG_SCSC_WLAN_SAR_SUPPORTED
+#undef CONFIG_SCSC_WLAN_KEY_MGMT_OFFLOAD
+#undef CONFIG_SCSC_WIFILOGGER_TEST
+#undef CONFIG_SLSI_WLAN_CP_COEX
+#undef CONFIG_WLBT_RX_CACHEABLE
+#undef CONFIG_SCSC_LOGRING
+#undef CONFIG_SOC_S5E9925
+#undef CONFIG_SCSC_WIFILOGGER
+#undef CONFIG_SCSC_DOWNLOAD_FILE
+#undef CONFIG_SCSC_WLAN_WIFI_SHARING_CSA_LEGACY
+#undef CONFIG_SCSC_WLAN_STA_ONLY
+#undef CONFIG_SCSC_RUNTIMEPM
+#undef CONFIG_SCSC_PCIE_PAEAN_X86
+
+// Numeric constants used in #if comparisons. Plausible "modern" values.
+#define CONFIG_SCSC_WLAN_MAX_INTERFACES  16
+#define CONFIG_SCSC_WLAN_MAX_LINK_SPEED  9608
+#define SLSI_WONDER_API_V1_6_4           10604
+#define SLSI_NET_INDEX_NAN               7
+
+// Note: IS_ENABLED(X) is rewritten to defined(X) by tsindex before unifdef runs,
+// so anything you #define above (with or without a value) is treated as "enabled".
