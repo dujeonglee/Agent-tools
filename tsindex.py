@@ -2828,7 +2828,57 @@ class IndexStore:
                               for r in self._conn.execute("SELECT * FROM refs")]
         return self._all_refs
 
+    # ----- path normalization -----
+
+    @property
+    def _file_set(self) -> set[str]:
+        """Set of root-relative paths actually in the index."""
+        if not hasattr(self, "_file_set_cache"):
+            self._file_set_cache = {f["path"] for f in self.files}
+        return self._file_set_cache
+
+    def normalize_file_path(self, path: str) -> Optional[str]:
+        """Resolve a file-path-ish string to the canonical root-relative path
+        stored in the index. Returns None if no match.
+
+        Accepts:
+          1. Exact root-relative path that's already in the index ("ba.c")
+          2. Absolute path, if it lives under `meta.root` ("/abs/.../ba.c")
+          3. Basename / suffix match — if exactly one file's path ends with
+             `/path`, that file is returned ("ba.c" → "kunit/kunit-mock-ba.c"
+             only if that's the unique suffix match)
+
+        Ambiguous (multiple suffix matches) → returns None; caller can iterate
+        `idx.files` for the full list."""
+        if not path:
+            return None
+        # 1. Already canonical
+        if path in self._file_set:
+            return path
+        # 2. Absolute → strip root prefix
+        root_str = self.meta.get("root")
+        if root_str:
+            try:
+                p = Path(path)
+                if p.is_absolute():
+                    rel = str(p.resolve().relative_to(Path(root_str).resolve()))
+                    if rel in self._file_set:
+                        return rel
+            except (ValueError, OSError):
+                pass
+        # 3. Suffix match (basename or partial)
+        if "/" not in path:
+            # bare basename: must end with /<path>
+            matches = [f for f in self._file_set if f.endswith("/" + path)]
+        else:
+            matches = [f for f in self._file_set if f.endswith("/" + path) or f == path]
+        if len(matches) == 1:
+            return matches[0]
+        return None
+
     def find_symbols(self, *, name=None, kind=None, file=None):
+        if file is not None:
+            file = self.normalize_file_path(file) or file
         clauses, params = [], []
         if name is not None: clauses.append("name = ?"); params.append(name)
         if kind is not None: clauses.append("kind = ?"); params.append(kind)
@@ -2839,6 +2889,8 @@ class IndexStore:
         return [self._sym_row(r) for r in self._conn.execute(q, params)]
 
     def find_refs(self, *, name=None, kind=None, file=None):
+        if file is not None:
+            file = self.normalize_file_path(file) or file
         clauses, params = [], []
         if name is not None: clauses.append("name = ?"); params.append(name)
         if kind is not None: clauses.append("kind = ?"); params.append(kind)
@@ -2850,6 +2902,7 @@ class IndexStore:
 
     def find_refs_in_range(self, file: str, start_line: int, end_line: int):
         """Refs in a contiguous line range of one file (used for callees)."""
+        file = self.normalize_file_path(file) or file
         return [self._ref_row(r) for r in self._conn.execute(
             "SELECT * FROM refs WHERE file = ? AND line BETWEEN ? AND ?",
             (file, start_line, end_line))]
