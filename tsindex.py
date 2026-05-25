@@ -878,6 +878,18 @@ def py_extract_function(node, src: bytes, rel: str, parent: Optional[str],
         return_type=return_type,
         params=param_names or None,
     ))
+    # Descend into the function body so nested function / class definitions
+    # (closures, helper inner functions, locally-defined classes) become
+    # discoverable. Parent is the dotted chain of enclosing names.
+    if body is not None:
+        inner_parent = (parent + "." + name) if parent else name
+        for stmt in body.children:
+            if stmt.type == "function_definition":
+                py_extract_function(stmt, src, rel, inner_parent, out, [])
+            elif stmt.type == "class_definition":
+                py_extract_class(stmt, src, rel, inner_parent, out, [])
+            elif stmt.type == "decorated_definition":
+                py_extract_decorated(stmt, src, rel, inner_parent, out)
 
 
 def py_extract_class(node, src: bytes, rel: str, parent: Optional[str],
@@ -1337,6 +1349,18 @@ def rs_extract_type(node, src: bytes, rel: str, out: list):
         modifiers=mods,
         enum_values=enum_values,
     ))
+    # For traits, descend into the body and emit each method signature
+    # (function_signature_item) or default method (function_item) with
+    # `parent` set to the trait name. Without this, a trait's API surface
+    # — its primary point of being — is invisible to the index.
+    if node.type == "trait_item":
+        trait_name = text(name_node, src)
+        for c in node.children:
+            if c.type == "declaration_list":
+                for child in c.children:
+                    if child.type in ("function_item", "function_signature_item"):
+                        rs_extract_function(child, src, rel, trait_name, out)
+                break
 
 
 def rs_extract_const_or_static(node, src: bytes, rel: str, out: list):
@@ -2157,6 +2181,11 @@ def js_walk_definitions_for(lang: str):
             t = node.type
             if t == "function_declaration":
                 js_extract_function_decl(node, src, rel, None, syms, lang)
+            elif t == "generator_function_declaration":
+                # `function* gen()` — same shape as function_declaration but
+                # produces a generator. Modifier marks the generator-ness so
+                # downstream tools can distinguish if needed.
+                js_extract_function_decl(node, src, rel, None, syms, lang, ["generator"])
             elif t == "class_declaration":
                 js_extract_class(node, src, rel, None, syms, lang)
             elif t == "lexical_declaration":
@@ -2186,6 +2215,10 @@ def js_walk_definitions_for(lang: str):
                 for c in node.children:
                     if c.type == "function_declaration":
                         js_extract_function_decl(c, src, rel, None, syms, lang, ["exported"])
+                    elif c.type == "generator_function_declaration":
+                        js_extract_function_decl(
+                            c, src, rel, None, syms, lang, ["exported", "generator"]
+                        )
                     elif c.type == "class_declaration":
                         js_extract_class(c, src, rel, None, syms, lang)
                     elif c.type == "lexical_declaration":
@@ -2261,6 +2294,38 @@ def js_walk_refs_for(lang: str):
                         skip = True
                 if not skip and name in defined_names:
                     refs.append(Ref(name=name, kind="name",
+                                    file=rel, line=node.start_point[0] + 1,
+                                    col=node.start_point[1], language=language))
+            elif nt == "type_identifier" and lang in ("typescript", "tsx"):
+                # TypeScript distinguishes `type_identifier` from plain
+                # `identifier` for names in type positions (annotations,
+                # generic args, interface/alias declarations). Emit
+                # `kind='type'` refs for these, skipping the cases where
+                # the type_identifier IS the definition site:
+                #   interface Foo {}     - Foo is the name being defined
+                #   type Foo = ...       - ditto
+                #   enum Foo {}          - ditto
+                #   <T extends ...>      - T is a generic parameter site
+                name = text(node, src)
+                identifiers_out.add(name)
+                parent = node.parent
+                skip = False
+                if parent is not None:
+                    pt = parent.type
+                    if pt in ("interface_declaration", "type_alias_declaration",
+                              "enum_declaration"):
+                        # First type_identifier child of these is the name.
+                        for c in parent.children:
+                            if c.type == "type_identifier":
+                                if c == node:
+                                    skip = True
+                                break
+                    elif pt == "type_parameter":
+                        # `<T>` itself — T is being declared here.
+                        if parent.children and parent.children[0] == node:
+                            skip = True
+                if not skip:
+                    refs.append(Ref(name=name, kind="type",
                                     file=rel, line=node.start_point[0] + 1,
                                     col=node.start_point[1], language=language))
             stack.extend(node.children)
@@ -2413,15 +2478,43 @@ def language_of(p: Path) -> Optional[str]:
 
 # ---------- build ----------
 
+# Directories the indexer skips by default. Includes the obvious VCS /
+# build-artifact / Python-cache patterns. Without this prune the index
+# can balloon 5-10x with stale worktree snapshots, dependency caches,
+# and build outputs when the user runs from a real-world repo.
+_SKIP_DIRS: frozenset = frozenset({
+    # VCS
+    ".git", ".hg", ".svn",
+    # Python virtualenv / cache
+    ".venv", "venv", "env",
+    "__pycache__", ".pytest_cache", ".ruff_cache", ".mypy_cache",
+    # JS / TS
+    "node_modules",
+    # Build artifacts
+    "build", "dist", "target",
+    # Tox
+    ".tox",
+})
+
+
 def iter_c_files(root: Path):
     """Iterate source files matching any registered language extension.
-    (Name kept for back-compat; despite the name, it now covers all languages.)"""
+    (Name kept for back-compat; despite the name, it now covers all languages.)
+
+    Walks ``root`` with ``os.walk`` so we can prune common irrelevant
+    directories (``_SKIP_DIRS``) — the previous ``rglob('*')`` version
+    visited every descendant and made the indexer follow VCS / build /
+    cache dirs that have no business being in the index.
+    """
     all_exts: set[str] = set()
     for spec in LANGUAGES.values():
         all_exts |= set(spec.exts)
-    for p in sorted(root.rglob("*")):
-        if p.is_file() and p.suffix in all_exts:
-            yield p
+    for dirpath, dirnames, filenames in os.walk(root, topdown=True):
+        dirnames[:] = sorted(d for d in dirnames if d not in _SKIP_DIRS)
+        for name in sorted(filenames):
+            p = Path(dirpath) / name
+            if p.suffix in all_exts:
+                yield p
 
 
 # Symbol kinds whose name we want to capture as a "name" ref when we see the
@@ -3088,6 +3181,18 @@ def build_callgraph(idx):
     Param shadowing is filtered (a ref whose name matches the enclosing
     function's parameter is a local var access, not a real call).
 
+    Refs of kind='call' and kind='name' BOTH count toward the graph
+    (the latter captures callback-style references — `register(helper)`
+    — which are real edges in the function dependency graph). However,
+    walkers like py_walk_refs emit BOTH a 'call' and a 'name' ref at
+    the same call site (the call_expression and its function-identifier
+    child are visited independently). To avoid double-counting that
+    case while still picking up callback-only refs, we deduplicate by
+    (caller, callee, file, line): each unique site contributes one
+    edge instance. `sites_of` records one entry per unique site, with
+    the 'call' kind taking precedence over 'name' when both appear at
+    the same coordinates.
+
     Returns (calls_of, callers_of, sites_of).
       calls_of[fn]   -> Counter[callee_fn]
       callers_of[fn] -> Counter[caller_fn]
@@ -3097,9 +3202,10 @@ def build_callgraph(idx):
     fn_names: set[str] = {s['name'] for s in idx['symbols']
                           if s['kind'] in FUNCTION_KINDS}
 
-    calls_of = defaultdict(Counter)
-    callers_of = defaultdict(Counter)
-    sites_of = defaultdict(list)
+    # First pass: collect per-(caller, callee, file, line) the set of
+    # ref kinds observed there. This dedupes the call+name double-emit
+    # while preserving callback-only sites.
+    site_kinds: dict[tuple[str, str, str, int], set[str]] = defaultdict(set)
     for r in idx['refs']:
         if r['kind'] not in ('call', 'name'):
             continue
@@ -3111,9 +3217,18 @@ def build_callgraph(idx):
         cf, params = ctx
         if cf == r['name'] or r['name'] in params:
             continue
-        calls_of[cf][r['name']] += 1
-        callers_of[r['name']][cf] += 1
-        sites_of[(cf, r['name'])].append((r['file'], r['line'], r['kind']))
+        site_kinds[(cf, r['name'], r['file'], r['line'])].add(r['kind'])
+
+    # Second pass: emit one edge per unique site.
+    calls_of = defaultdict(Counter)
+    callers_of = defaultdict(Counter)
+    sites_of = defaultdict(list)
+    for (cf, callee, file, line), kinds in site_kinds.items():
+        # Prefer 'call' kind when both are observed at the same site.
+        primary_kind = 'call' if 'call' in kinds else 'name'
+        calls_of[cf][callee] += 1
+        callers_of[callee][cf] += 1
+        sites_of[(cf, callee)].append((file, line, primary_kind))
     return calls_of, callers_of, sites_of
 
 
