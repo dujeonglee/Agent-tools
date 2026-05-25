@@ -65,10 +65,6 @@ TYPE_ARG_MACROS = ("container_of", "container_of_const", "offsetof", "offsetofen
                    "list_last_entry", "list_next_entry", "list_prev_entry",
                    "hlist_entry", "hlist_entry_safe", "kobj_to_dev",
                    "max_t", "min_t", "clamp_t", "va_arg", "__builtin_va_arg")
-TYPE_ARG_CALL_RE = re.compile(
-    r"\b(" + "|".join(TYPE_ARG_MACROS) + r")\s*"
-    r"\(([^()]*(?:\([^()]*\)[^()]*)*)\)"
-)
 STRUCT_KW_RE = re.compile(r"\b(struct|union|enum)\s+(\w+)")
 
 # Declaration macros — DECLARE_BITMAP(name, size) etc. — used at file/struct
@@ -569,7 +565,7 @@ def c_modifiers(storage: Optional[str], is_inline: bool) -> Optional[list[str]]:
     return mods or None
 
 
-def add_function_def(node, src, rel, out):
+def add_function_def(node, src, rel, out, language="c"):
     decl = node.child_by_field_name("declarator")
     if decl is None:
         return
@@ -585,7 +581,7 @@ def add_function_def(node, src, rel, out):
         col=node.start_point[1],
         end_line=node.end_point[0] + 1,
         is_definition=True,
-        language="c",
+        language=language,
         kind_raw="function",
         modifiers=c_modifiers(storage, is_inline),
         signature=signature_of_function_def(node, src),
@@ -594,7 +590,7 @@ def add_function_def(node, src, rel, out):
     ))
 
 
-def add_declaration(node, src, rel, out):
+def add_declaration(node, src, rel, out, language="c"):
     # Skip typedefs (handled via type_definition node by tree-sitter-c)
     if is_typedef_decl(node, src):
         return
@@ -622,7 +618,7 @@ def add_declaration(node, src, rel, out):
                 name=text(name_node, src), kind="function",
                 file=rel, line=node.start_point[0] + 1, col=node.start_point[1],
                 end_line=node.end_point[0] + 1, is_definition=False,
-                language="c", kind_raw="prototype",
+                language=language, kind_raw="prototype",
                 modifiers=c_modifiers(storage, is_inline),
                 signature=" ".join(text(node, src).split()),
                 params=extract_param_names(target, src) or None,
@@ -636,13 +632,13 @@ def add_declaration(node, src, rel, out):
                 file=rel, line=node.start_point[0] + 1, col=node.start_point[1],
                 end_line=node.end_point[0] + 1,
                 is_definition=(storage != "extern"),
-                language="c", kind_raw="var",
+                language=language, kind_raw="var",
                 modifiers=c_modifiers(storage, False),
                 signature=" ".join(text(node, src).split()),
             ))
 
 
-def add_record(node, src, rel, out):
+def add_record(node, src, rel, out, language="c"):
     """struct_specifier, union_specifier, enum_specifier — DEFINITIONS only (body present)."""
     name_node = node.child_by_field_name("name")
     body = node.child_by_field_name("body")
@@ -661,12 +657,12 @@ def add_record(node, src, rel, out):
         name=text(name_node, src), kind="type",
         file=rel, line=node.start_point[0] + 1, col=node.start_point[1],
         end_line=node.end_point[0] + 1, is_definition=True,
-        language="c", kind_raw=raw,
+        language=language, kind_raw=raw,
         enum_values=enum_values,
     ))
 
 
-def add_typedef(node, src, rel, out):
+def add_typedef(node, src, rel, out, language="c"):
     """type_definition: collect every declarator name as a typedef."""
     for d in node.children:
         target = None
@@ -703,12 +699,12 @@ def add_typedef(node, src, rel, out):
             name=text(target, src), kind="type",
             file=rel, line=node.start_point[0] + 1, col=node.start_point[1],
             end_line=node.end_point[0] + 1, is_definition=True,
-            language="c", kind_raw="typedef",
+            language=language, kind_raw="typedef",
             signature=" ".join(text(node, src).split()),
         ))
 
 
-def add_macro(node, src, rel, out, fn_form: bool):
+def add_macro(node, src, rel, out, fn_form: bool, language="c"):
     name = node.child_by_field_name("name")
     if name is None:
         return
@@ -726,7 +722,7 @@ def add_macro(node, src, rel, out, fn_form: bool):
         kind="function" if fn_form else "constant",
         file=rel, line=node.start_point[0] + 1, col=node.start_point[1],
         end_line=node.end_point[0] + 1, is_definition=True,
-        language="c",
+        language=language,
         kind_raw="preproc_function_def" if fn_form else "preproc_def",
         signature=" ".join(sig.split()),
     ))
@@ -1895,17 +1891,19 @@ def cpp_walk_one(node, src: bytes, rel: str, parent: Optional[str], out: list):
         if node.child_by_field_name("body") is not None:
             cpp_extract_class(node, src, rel, parent, out)
     elif nt == "enum_specifier":
-        # Reuse C handler (covers C++ enums fine).
-        add_record(node, src, rel, out)
+        # Reuse C handler (covers C++ enums fine) — but emit
+        # language="cpp" so all symbols in a .cpp file share the
+        # same language tag.
+        add_record(node, src, rel, out, language="cpp")
     elif nt == "type_definition":
-        add_typedef(node, src, rel, out)
+        add_typedef(node, src, rel, out, language="cpp")
     elif nt == "declaration":
         # File-scope variable/prototype — reuse the C handler.
-        add_declaration(node, src, rel, out)
+        add_declaration(node, src, rel, out, language="cpp")
     elif nt == "preproc_def":
-        add_macro(node, src, rel, out, fn_form=False)
+        add_macro(node, src, rel, out, fn_form=False, language="cpp")
     elif nt == "preproc_function_def":
-        add_macro(node, src, rel, out, fn_form=True)
+        add_macro(node, src, rel, out, fn_form=True, language="cpp")
     elif nt in ("linkage_specification",):  # `extern "C" { ... }`
         for c in node.children:
             cpp_walk_one(c, src, rel, parent, out)
@@ -2142,8 +2140,16 @@ def js_extract_lexical(node, src: bytes, rel: str, out: list, lang: str):
             continue
         out.append(Symbol(
             name=name,
-            kind="constant" if (is_const_kw and name.isupper()) else
-                 ("variable" if not is_const_kw else "constant"),
+            # `const` -> compile-time constant; `let`/`var` -> variable.
+            # Truth-table check on the previous expression
+            #   "constant" if (is_const_kw and name.isupper())
+            #     else ("variable" if not is_const_kw else "constant")
+            # shows the `name.isupper()` branch never changes the
+            # outcome: kind is fully determined by is_const_kw alone.
+            # Simplified accordingly. Uppercase-naming convention is
+            # not promoted to `constant` for let/var (this matches the
+            # previous behaviour, only stated directly).
+            kind="constant" if is_const_kw else "variable",
             file=rel, line=c.start_point[0] + 1, col=c.start_point[1],
             end_line=c.end_point[0] + 1, is_definition=True,
             language=lang, kind_raw="lexical_declaration",
@@ -2727,10 +2733,11 @@ def build(root: Path, out_path: Path, defs_path: Optional[Path] = None,
         "refs": all_refs,
     }
     write_sqlite_index(out_path, out)
-    print(f"\nIndexed {n_files} files ({n_bytes/1024:.1f} KiB) in {elapsed:.2f}s",
-          file=sys.stderr)
-    print(f"  {len(all_symbols)} symbols, {len(all_refs)} refs", file=sys.stderr)
-    print(f"  wrote {out_path}  ({out_path.stat().st_size/1024:.1f} KiB)", file=sys.stderr)
+    if verbose:
+        print(f"\nIndexed {n_files} files ({n_bytes/1024:.1f} KiB) in {elapsed:.2f}s",
+              file=sys.stderr)
+        print(f"  {len(all_symbols)} symbols, {len(all_refs)} refs", file=sys.stderr)
+        print(f"  wrote {out_path}  ({out_path.stat().st_size/1024:.1f} KiB)", file=sys.stderr)
 
 
 # ---------- storage backend (SQLite) ----------
